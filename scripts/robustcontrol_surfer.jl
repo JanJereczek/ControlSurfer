@@ -57,7 +57,12 @@ ranks = [rank(ss_.A) for ss_ in ss_tests]
 
 w_plot = 10 .^ range(-5, stop = 2, length = 500)
 ppm_nominal = 280.0
-G = minreal(transfer_functions[ppm_nominal])
+G_nominal = minreal(transfer_functions[ppm_nominal])
+
+logticks_val = -4:4
+ticksval = 10.0 .^ logticks_val
+ticksstr = [L"$10^{%$(logtick_val)}$" for logtick_val in logticks_val]
+power_ticks = (ticksval, ticksstr)
 
 fig = Figure(resolution = (1600, 900))
 ax1 = Axis(
@@ -65,6 +70,10 @@ ax1 = Axis(
     ylabel = L"Amplitude response (dB) $\,$",
     xscale = log10,
     yscale = log10,
+    xticks = power_ticks,
+    yticks = power_ticks,
+    xminorticks = IntervalsBetween(9),
+    xminorgridvisible = true,
 )
 ax2 = Axis(
     fig[2, 1],
@@ -72,12 +81,16 @@ ax2 = Axis(
     ylabel = L"Additive uncertainty $l_A$ (dB)",
     xscale = log10,
     yscale = log10,
+    xticks = power_ticks,
+    yticks = power_ticks,
+    xminorticks = IntervalsBetween(9),
+    xminorgridvisible = true,
 )
 
 for i in eachindex(ppmCO2)
     transfer_function = transfer_functions[ppmCO2[i]]
     mag, phase, w = bode(transfer_function, w_plot)
-    delta_tf = (transfer_function - G)/G
+    delta_tf = (transfer_function - G_nominal)/G_nominal
     delta_mag, delta_phase, w = bode(delta_tf, w_plot)
     line_color = (ppmCO2[i] == ppm_nominal ? :blue : :gray)
     lines!(ax1, w, mag[1, 1, :], color = line_color)
@@ -91,25 +104,24 @@ WS = tf([1/M_S, W_S_star], [1, W_S_star * A_S])
 
 WU = tf([1], [1])
 
-# # Nominal at 450 ppm
-# M_T = 0.6
-# A_T = 0.001
-# W_T_star = 0.1
-# WT = tf([1, W_T_star / M_T], [A_T, W_T_star])     # multplicative uncertainty, weight of T
-
-# Nominal at 280 ppm
-M_T = 1.0
-A_T = 0.001
-W_T_star = 1.0
+if ppm_nominal == 450
+    M_T = 0.6
+    A_T = 0.001
+    W_T_star = 0.1
+elseif ppm_nominal == 280
+    M_T = 2.0
+    A_T = 0.001
+    W_T_star = 0.5
+end
 WT = tf([1, W_T_star / M_T], [A_T, W_T_star])     # multplicative uncertainty, weight of T
 
 mag_ws, phase_ws, w_ws = bode(1/WS, w_plot)
 mag_wu, phase_wu, w_wu = bode(1/WU, w_plot)
 mag_wt, phase_wt, w_wt = bode(1/WT, w_plot)
-lines!(ax2, w_plot, mag_ws[1, 1, :] .+ 1e-8, color = :blue, label = L"$w_S^{-1}$")
-lines!(ax2, w_plot, mag_wu[1, 1, :] .+ 1e-8, color = :black, label = L"$w_U^{-1}$")
-lines!(ax2, w_plot, mag_wt[1, 1, :] .+ 1e-8, color = :red, label = L"$w_T^{-1}$")
-ylims!(ax2, (1e-4, 1.1e0))
+lines!(ax2, w_plot, mag_ws[1, 1, :] .+ 1e-8, color = :royalblue, label = L"$w_S^{-1}$")
+lines!(ax2, w_plot, mag_wu[1, 1, :] .+ 1e-8, color = :mediumpurple4, label = L"$w_U^{-1}$")
+lines!(ax2, w_plot, mag_wt[1, 1, :] .+ 1e-8, color = :darkorange, label = L"$w_T^{-1}$")
+ylims!(ax2, (1e-3, 2e0))
 axislegend(ax2)
 
 save(plotsdir("model_family.png"), fig)
@@ -119,10 +131,10 @@ save(plotsdir("model_family.pdf"), fig)
 # Robust control design and reduction
 ##############################################################
 
-P = hinfpartition(G, WS, WU, WT)    # Form augmented P dynamics in state-space
+P = hinfpartition(G_nominal, WS, WU, WT)    # Form augmented P dynamics in state-space
 flag = hinfassumptions(P)           # Check that the assumptions are satisfied
 K, γ = hinfsynthesize(P)            # Synthesize the H-infinity optimal controller
-Pcl, S, CS, T = hinfsignals(P, G, K)
+Pcl, S, CS, T = hinfsignals(P, G_nominal, K)
 
 x_perturbation = [10, 0, 0, 0, 0, 0, 0, 0, 0]
 yw = ppmtoGtC(ppm_nominal)
@@ -131,22 +143,51 @@ p = Dict{String, Any}()
 p["yw"] = yw
 p["K"] = K
 
-z0 = vcat(x_eq_preindustrial + x_perturbation, xu0)
+perturbation_case = 2
+
+if perturbation_case == 1
+    z0 = vcat(x_eq_preindustrial + x_perturbation, xu0)
+elseif perturbation_case == 2
+    z0 = vcat(Xeq[:, 8], xu0)
+end
 
 include(srcdir("model.jl"))
 prob = ODEProblem(controlled_model, z0, (0, 1e3), p)
-@time sol = solve(prob, Rosenbrock23(), reltol=1e-3, abstol=1e-12)
-X = hcat(sol.u...)
+@time ctrl_sol = solve(prob, Rosenbrock23(), reltol=1e-3, abstol=1e-12)
+Xctrl = hcat(ctrl_sol.u...)
+
+auto_sol = solve(prob, Rosenbrock23(), reltol=1e-3, abstol=1e-12)
+Xauto = hcat(auto_sol.u...)
+
+ylabels = [
+    "Atmospheric CO2 (GtC)",
+    "Upper ocean CO2 (GtC)",
+    "Deep ocean CO2 (GtC)",
+    "Land CO2 (GtC)",
+    "Upper ocean temperature anomaly (K)",
+    "Deep ocean temperature anomaly (K)",
+    "GrIS volume (a.u.)",
+    "AIS volume (a.u.)",
+    "Sea-level change (m)",
+]
 time_resp_fig = Figure( resolution = (1600, 900) )
 nrows, ncols = 3, 3
 for i in 1:nrows
     for j in 1:ncols
         k = (i-1)*ncols + j
-        time_resp_ax = Axis(time_resp_fig[i,j])
-        lines!(time_resp_ax, sol.t, X[k, :])
+        time_resp_ax = Axis(
+            time_resp_fig[i,j],
+            xlabel = i == 3 ? "Time (yr)" : " ",
+            ylabel = ylabels[k],
+        )
+        lines!(time_resp_ax, auto_sol.t, Xauto[k, :], label = "autonomous")
+        lines!(time_resp_ax, ctrl_sol.t, Xctrl[k, :], label = "controlled")
     end
 end
 time_resp_fig
+figname = "tresponse_ppmnominal$(ppm_nominal)_perturbation$(perturbation_case)"
+save(plotsdir(string(figname, ".png")), time_resp_fig)
+save(plotsdir(string(figname, ".pdf")), time_resp_fig)
 
 # function emission(x::Vector{T}, xu::Vector{T}, K::StateSpace{Continuous, T}) where {T<:Real}
 #     e = x[1] - yw

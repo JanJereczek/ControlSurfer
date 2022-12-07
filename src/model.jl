@@ -205,7 +205,8 @@ function controlled_model(u,p,t)
     M_A, M_U, M_D, M_L, δT_U, δT_D, VG, VA, S = u[1:9]
     x_control = u[10:end]
     e = uw - u[1]
-    control = K.C * x_control + K.D .* e
+    # control = K.C * x_control + K.D .* e
+    control = [0.0]
 
     du[1] = control[1] - k_AU*(M_A - (mA/(W_U*K0))*B(M_U)*M_U) - k_AL*(β_L*M_A_PI*(1 - M_A_PI/M_A) - (M_L - M_L_PI))
     du[2] = k_AU*(M_A - (mA/(W_U*K0))*B(M_U)*M_U) - k_UD*(M_U - M_D/(δ*δDIC))
